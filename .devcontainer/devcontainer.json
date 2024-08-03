@@ -10,7 +10,8 @@
     "type=volume,source=zmk-root-user,target=/root",
     "type=volume,source=zmk-zephyr,target=${containerWorkspaceFolder}/zephyr",
     "type=volume,source=zmk-zephyr-modules,target=${containerWorkspaceFolder}/modules",
-    "type=volume,source=zmk-zephyr-tools,target=${containerWorkspaceFolder}/tools"
+    "type=volume,source=zmk-zephyr-tools,target=${containerWorkspaceFolder}/tools",
+    "source=${localWorkspaceFolder}/../zmk-config,target=${containerWorkspaceFolder}/../zmk-config,type=bind"
   ],
   "extensions": ["ms-vscode.cpptools"],
   "settings": {

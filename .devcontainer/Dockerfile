@@ -3,8 +3,8 @@ FROM docker.io/zmkfirmware/zmk-dev-arm:3.0
 # Disable Prompt During Packages Installation
 ARG DEBIAN_FRONTEND=noninteractive
 
-ARG UID=1000
-ARG GID=1000
+ARG UID=501
+ARG GID=20
 ARG USERNAME=dev
 
 RUN echo "UID: ${UID}, GID: ${GID}, USERNAME: ${USERNAME}"
