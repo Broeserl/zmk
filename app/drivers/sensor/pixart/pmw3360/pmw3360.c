@@ -9,6 +9,7 @@
 #include <kernel.h>
 #include <sys/byteorder.h>
 #include "pmw3360.h"
+#include <stdint.h>
 
 #include <logging/log.h>
 LOG_MODULE_REGISTER(pmw3360, CONFIG_PMW3360_LOG_LEVEL);
@@ -110,6 +111,32 @@ LOG_MODULE_REGISTER(pmw3360, CONFIG_PMW3360_LOG_LEVEL);
 extern const size_t pmw3360_firmware_length;
 extern const uint8_t pmw3360_firmware_data[];
 
+// Number of entries in the lookup table (increase for higher precision)
+#define TABLE_SIZE 72
+
+// Lookup table for sine values (5-degree steps)
+const float sin_table[TABLE_SIZE] = {
+     0.0,       0.0872,   0.1736,   0.2588,   0.3420,   0.4226,   0.5000,   0.5736,   0.6428,   0.7071,
+     0.7660,    0.8192,   0.8660,   0.9063,   0.9397,   0.9659,   0.9848,   0.9962,   1.0000,   0.9962,
+     0.9848,    0.9659,   0.9397,   0.9063,   0.8660,   0.8192,   0.7660,   0.7071,   0.6428,   0.5736,
+     0.5000,    0.4226,   0.3420,   0.2588,   0.1736,   0.0872,   0.0,     -0.0872,  -0.1736,  -0.2588,
+    -0.3420,   -0.4226,  -0.5000,  -0.5736,  -0.6428,  -0.7071,  -0.7660,  -0.8192,  -0.8660,  -0.9063,
+    -0.9397,   -0.9659,  -0.9848,  -0.9962,  -1.0000,  -0.9962,  -0.9848,  -0.9659,  -0.9397,  -0.9063,
+    -0.8660,   -0.8192,  -0.7660,  -0.7071,  -0.6428,  -0.5736,  -0.5000,  -0.4226,  -0.3420,  -0.2588,
+    -0.1736,   -0.0872
+};
+
+// Lookup table for cosine values (5-degree steps)
+const float cos_table[TABLE_SIZE] = {
+    1.0,       0.9962,   0.9848,   0.9659,   0.9397,   0.9063,   0.8660,   0.8192,   0.7660,   0.7071,
+    0.6428,    0.5736,   0.5000,   0.4226,   0.3420,   0.2588,   0.1736,   0.0872,   0.0,     -0.0872,
+   -0.1736,   -0.2588,  -0.3420,  -0.4226,  -0.5000,  -0.5736,  -0.6428,  -0.7071,  -0.7660,  -0.8192,
+   -0.8660,   -0.9063,  -0.9397,  -0.9659,  -0.9848,  -0.9962,  -1.0,     -0.9962,  -0.9848,  -0.9659,
+   -0.9397,   -0.9063,  -0.8660,  -0.8192,  -0.7660,  -0.7071,  -0.6428,  -0.5736,  -0.5000,  -0.4226,
+   -0.3420,   -0.2588,  -0.1736,  -0.0872,   0.0,      0.0872,   0.1736,   0.2588,   0.3420,   0.4226,
+    0.5000,    0.5736,   0.6428,   0.7071,   0.7660,   0.8192,   0.8660,   0.9063,   0.9397,   0.9659,
+    0.9848,    0.9962
+};
 
 /* sensor initialization steps definition */
 // init is done in non-blocking manner (i.e., async), a delayable work is defined for this job
@@ -859,6 +886,24 @@ static int pmw3360_init(const struct device *dev)
 	return err;
 }
 
+// Function to rotate coordinates by a specified angle
+static void rotate_coordinates(int16_t x, int16_t y, float angle_degrees, int16_t *x_out, int16_t *y_out) {
+    // Ensure the angle is within 0-360 degrees
+    //angle_degrees %= 360;
+    if (angle_degrees < 0) angle_degrees += 360;
+
+    // Determine the index in the lookup table
+    int index = angle_degrees / 5;
+
+    // Get sine and cosine values from the lookup table
+    float cos_angle = cos_table[index];
+    float sin_angle = sin_table[index];
+
+    // Apply the rotation matrix
+    *x_out = (int16_t)(x * cos_angle - y * sin_angle);
+    *y_out = (int16_t)(x * sin_angle + y * cos_angle);
+}
+
 static int pmw3360_sample_fetch(const struct device *dev, enum sensor_channel chan)
 {
 	struct pixart_data *data = dev->data;
@@ -878,22 +923,14 @@ static int pmw3360_sample_fetch(const struct device *dev, enum sensor_channel ch
 	if (!err) {
 		int16_t x = ((int16_t)sys_get_le16(&buf[PMW3360_DX_POS])) / CONFIG_PMW3360_CPI_DIVIDOR;
 		int16_t y = ((int16_t)sys_get_le16(&buf[PMW3360_DY_POS])) / CONFIG_PMW3360_CPI_DIVIDOR;
-		/* int16_t x = sys_get_le16(&buf[PMW3360_DX_POS]); */
- 		/* int16_t y = sys_get_le16(&buf[PMW3360_DY_POS]); */
 
-		if (IS_ENABLED(CONFIG_PMW3360_ORIENTATION_0)) {
-			data->x = x;
-			data->y = y;
-		} else if (IS_ENABLED(CONFIG_PMW3360_ORIENTATION_90)) {
-			data->x = y;
-			data->y = x;
-		} else if (IS_ENABLED(CONFIG_PMW3360_ORIENTATION_180)) {
-			data->x = x;
-			data->y = -y;
-		} else if (IS_ENABLED(CONFIG_PMW3360_ORIENTATION_270)) {
-			data->x = -y;
-			data->y = -x;
-		}
+    float angle = CONFIG_PMW3360_ROTATION_ANGLE_DEG;
+    // Rotate the coordinates
+    int16_t x_rotated, y_rotated;
+    rotate_coordinates(x, y, angle, &x_rotated, &y_rotated);
+
+    data->x = x_rotated;
+    data->y = y_rotated;
 	}
 
 	return err;
